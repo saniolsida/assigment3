@@ -20,6 +20,7 @@ typedef struct
     int bytes;
 } file_info_t;
 
+
 void get_file_info(const char *folder_name, file_info_t (*file_info)[10], int *index, int fd);
 void error_handling(char *message);
 void get_parent_path(char *path);
@@ -32,8 +33,8 @@ int main(int argc, char *argv[])
     char buf[BUF_SIZE], message[BUF_SIZE];
     int str_len;
     struct sockaddr_in serv_adr, clnt_adr;
-    file_info_t file_info[10][10];
     socklen_t clnt_adr_sz;
+    file_info_t file_info[10][10];
     int index[10];
 
     struct epoll_event *ep_events;
@@ -56,8 +57,6 @@ int main(int argc, char *argv[])
 
     if (listen(serv_sock, 5) == -1)
         error_handling("listen() error");
-
-    // get_file_info(curr_dir, file_info, &index);
 
     epfd = epoll_create(EPOLL_SIZE);
     ep_events = malloc(sizeof(struct epoll_event) * EPOLL_SIZE);
@@ -82,25 +81,26 @@ int main(int argc, char *argv[])
                 clnt_sock = accept(serv_sock, (struct sockaddr *)&clnt_adr, &clnt_adr_sz);
                 event.events = EPOLLIN;
                 event.data.fd = clnt_sock;
+
                 epoll_ctl(epfd, EPOLL_CTL_ADD, clnt_sock, &event);
 
-                printf("connected client: %d \n", clnt_sock);
+                printf("connected client: %d\n", clnt_sock);
 
-                get_file_info(curr_dir, file_info, &index[i], i);
+                get_file_info(curr_dir, file_info, &index[clnt_sock], clnt_sock);
 
-                cur_path[i] = strdup(curr_dir);
+                cur_path[clnt_sock] = strdup(curr_dir);
 
                 snprintf(message, sizeof(message), "-1) Send File to server");
                 write(clnt_sock, message, sizeof(message));
-                for (int j = 0; j < index[i]; j++)
+                for (int j = 0; j < index[clnt_sock]; j++)
                 {
-                    if (file_info[i][j].bytes == -1)
+                    if (file_info[clnt_sock][j].bytes == -1)
                     {
-                        snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[i][j].file_name);
+                        snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[clnt_sock][j].file_name);
                     }
                     else
                     {
-                        snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[i][j].file_name, file_info[i][j].bytes);
+                        snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[clnt_sock][j].file_name, file_info[clnt_sock][j].bytes);
                     }
 
                     write(clnt_sock, message, sizeof(message));
@@ -111,17 +111,19 @@ int main(int argc, char *argv[])
             else
             {
                 str_len = read(ep_events[i].data.fd, buf, BUF_SIZE);
+                
                 if (str_len == 0)
                 {
                     epoll_ctl(epfd, EPOLL_CTL_DEL, ep_events[i].data.fd, NULL);
                     close(ep_events[i].data.fd);
 
-                    memset(file_info[i], 0, 10 * sizeof(file_info_t));
-                    index[i] = 0;
-                    if (cur_path[i])
+                    memset(file_info[ep_events[i].data.fd], 0, 10 * sizeof(file_info_t));
+                    index[ep_events[i].data.fd] = 0;
+
+                    if (cur_path[ep_events[i].data.fd])
                     {
-                        free(cur_path[i]);
-                        cur_path[i] = NULL; // 포인터 초기화
+                        free(cur_path[ep_events[i].data.fd]);
+                        cur_path[ep_events[i].data.fd] = NULL; // 포인터 초기화
                     }
 
                     printf("closed client: %d \n", ep_events[i].data.fd);
@@ -129,7 +131,7 @@ int main(int argc, char *argv[])
                 else
                 {
                     buf[str_len] = '\0';
-                    printf("\nclient %d request file or folder number: %s\n", ep_events[i].data.fd, buf);
+                    printf("\nclient %d, request file or folder number: %s\n", ep_events[i].data.fd, buf);
 
                     int sel_index = atoi(buf) - 1;
 
@@ -159,7 +161,7 @@ int main(int argc, char *argv[])
                         memset(&message, 0, sizeof(message));
 
 
-                        snprintf(new_file_name, sizeof(new_file_name),"%s/%s",cur_path[i],file_name);
+                        snprintf(new_file_name, sizeof(new_file_name),"%s/%s",cur_path[ep_events[i].data.fd],file_name);
                         FILE *fp = fopen(new_file_name, "wb");
                         if (!fp)
                             error_handling("fopen() failed");
@@ -178,28 +180,28 @@ int main(int argc, char *argv[])
 
                         write(ep_events[i].data.fd, message, strlen(message));
                         
-                        index[i] = 0;
+                        index[ep_events[i].data.fd] = 0;
 
-                        get_file_info(cur_path[i], file_info, &index[i], i);
+                        get_file_info(cur_path[ep_events[i].data.fd], file_info, &index[ep_events[i].data.fd], ep_events[i].data.fd);
 
                         snprintf(message, sizeof(message), "-1) Send File to server");
                             write(ep_events[i].data.fd, message, sizeof(message));
 
-                            if (strcmp(cur_path[i], curr_dir) != 0) // 현재 위치가 최상위가 아니라면
+                            if (strcmp(cur_path[ep_events[i].data.fd], curr_dir) != 0) // 현재 위치가 최상위가 아니라면
                             {
                                 snprintf(message, sizeof(message), "0) Back");
                                 write(ep_events[i].data.fd, message, sizeof(message));
                             }
 
-                            for (int j = 0; j < index[i]; j++)
+                            for (int j = 0; j < index[ep_events[i].data.fd]; j++)
                             {
-                                if (file_info[i][j].bytes == -1)
+                                if (file_info[ep_events[i].data.fd][j].bytes == -1)
                                 {
-                                    snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[i][j].file_name);
+                                    snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[ep_events[i].data.fd][j].file_name);
                                 }
                                 else
                                 {
-                                    snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[i][j].file_name, file_info[i][j].bytes);
+                                    snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[ep_events[i].data.fd][j].file_name, file_info[ep_events[i].data.fd][j].bytes);
                                 }
 
                                 write(ep_events[i].data.fd, message, sizeof(message));
@@ -208,11 +210,12 @@ int main(int argc, char *argv[])
                     }
                     else if (sel_index == -1) // back to parent path
                     {
-                        index[i] = 0;
+                        index[ep_events[i].data.fd] = 0;
+                        memset(file_info[ep_events[i].data.fd], 0, 10 * sizeof(file_info_t));
 
-                        get_parent_path(cur_path[i]); // 부모 경로 찾기
+                        get_parent_path(cur_path[ep_events[i].data.fd]); // 부모 경로 찾기
 
-                        get_file_info(cur_path[i], file_info, &index[i], i);
+                        get_file_info(cur_path[ep_events[i].data.fd], file_info, &index[ep_events[i].data.fd], ep_events[i].data.fd);
 
                         write(ep_events[i].data.fd, "[DIR]", 5);
 
@@ -228,20 +231,20 @@ int main(int argc, char *argv[])
                         snprintf(message, sizeof(message), "-1) Send File to server");
                         write(ep_events[i].data.fd, message, sizeof(message));
 
-                        if (strcmp(cur_path[i], curr_dir) != 0) // 현재 위치가 최상위가 아니라면
+                        if (strcmp(cur_path[ep_events[i].data.fd], curr_dir) != 0) // 현재 위치가 최상위가 아니라면
                         {
                             snprintf(message, sizeof(message), "0) Back");
                             write(ep_events[i].data.fd, message, sizeof(message));
                         }
-                        for (int j = 0; j < index[i]; j++)
+                        for (int j = 0; j < index[ep_events[i].data.fd]; j++)
                         {
-                            if (file_info[i][j].bytes == -1)
+                            if (file_info[ep_events[i].data.fd][j].bytes == -1)
                             {
-                                snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[i][j].file_name);
+                                snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[ep_events[i].data.fd][j].file_name);
                             }
                             else
                             {
-                                snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[i][j].file_name, file_info[i][j].bytes);
+                                snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[ep_events[i].data.fd][j].file_name, file_info[ep_events[i].data.fd][j].bytes);
                             }
 
                             write(ep_events[i].data.fd, message, sizeof(message));
@@ -249,10 +252,10 @@ int main(int argc, char *argv[])
                         write(ep_events[i].data.fd, "[END]", 5);
                         printf("\n");
                     }
-                    else if (sel_index + 1 <= index[i] && sel_index + 1 > 0)
+                    else if (sel_index + 1 <= index[ep_events[i].data.fd] && sel_index + 1 > 0)
                     {
 
-                        if (file_info[i][sel_index].bytes == -1) // 디렉토리
+                        if (file_info[ep_events[i].data.fd][sel_index].bytes == -1) // 디렉토리
                         {
                             write(ep_events[i].data.fd, "[DIR]", 5);
 
@@ -265,28 +268,29 @@ int main(int argc, char *argv[])
                                     break;
                             }
 
-                            index[i] = 0;
+                            index[ep_events[i].data.fd] = 0;
+                            
+                            cur_path[ep_events[i].data.fd] = strdup(file_info[ep_events[i].data.fd][sel_index].file_path);
+                            printf("\ncurrent path: %s\n", cur_path[ep_events[i].data.fd]);
 
-                            cur_path[i] = strdup(file_info[i][sel_index].file_path);
-
-                            printf("current path: %s", cur_path[i]);
-                            get_file_info(file_info[i][sel_index].file_path, file_info, &index[i], i);
+                            get_file_info(file_info[ep_events[i].data.fd][sel_index].file_path, file_info, &index[ep_events[i].data.fd], ep_events[i].data.fd);
 
                             snprintf(message, sizeof(message), "-1) Send File to server");
                             write(ep_events[i].data.fd, message, sizeof(message));
 
                             snprintf(message, sizeof(message), "0) Back");
                             write(ep_events[i].data.fd, message, sizeof(message));
-                            for (int j = 0; j < index[i]; j++)
+                            for (int j = 0; j < index[ep_events[i].data.fd]; j++)
                             {
-                                if (file_info[i][j].bytes == -1)
+                                if (file_info[ep_events[i].data.fd][j].bytes == -1)
                                 {
-                                    snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[i][j].file_name);
+                                    snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[ep_events[i].data.fd][j].file_name);
                                 }
                                 else
                                 {
-                                    snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[i][j].file_name, file_info[i][j].bytes);
+                                    snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[ep_events[i].data.fd][j].file_name, file_info[ep_events[i].data.fd][j].bytes);
                                 }
+                                printf("\nclntsock: %d, %s\n", ep_events[i].data.fd, message);
 
                                 write(ep_events[i].data.fd, message, sizeof(message));
                             }
@@ -298,13 +302,13 @@ int main(int argc, char *argv[])
                         {
                             char tmp_file_path[NEW_FILE_SIZE];
 
-                            snprintf(tmp_file_path, NEW_FILE_SIZE, "%s/%s", file_info[i][sel_index].file_path, file_info[i][sel_index].file_name);
+                            snprintf(tmp_file_path, NEW_FILE_SIZE, "%s/%s", file_info[ep_events[i].data.fd][sel_index].file_path, file_info[ep_events[i].data.fd][sel_index].file_name);
                             FILE *fp = fopen(tmp_file_path, "rb");
 
                             if (!fp)
                                 error_handling("fopen() failed");
 
-                            snprintf(message, sizeof(message), "[FILE]%s %d[END]", file_info[i][sel_index].file_name, file_info[i][sel_index].bytes);
+                            snprintf(message, sizeof(message), "[FILE]%s %d[END]", file_info[ep_events[i].data.fd][sel_index].file_name, file_info[ep_events[i].data.fd][sel_index].bytes);
                             write(ep_events[i].data.fd, message, strlen(message));
 
                             memset(&message, 0, sizeof(message));
@@ -342,21 +346,21 @@ int main(int argc, char *argv[])
                             snprintf(message, sizeof(message), "-1) Send File to server");
                             write(ep_events[i].data.fd, message, sizeof(message));
 
-                            if (strcmp(cur_path[i], curr_dir) != 0) // 현재 위치가 최상위가 아니라면
+                            if (strcmp(cur_path[ep_events[i].data.fd], curr_dir) != 0) // 현재 위치가 최상위가 아니라면
                             {
                                 snprintf(message, sizeof(message), "0) Back");
                                 write(ep_events[i].data.fd, message, sizeof(message));
                             }
 
-                            for (int j = 0; j < index[i]; j++)
+                            for (int j = 0; j < index[ep_events[i].data.fd]; j++)
                             {
-                                if (file_info[i][j].bytes == -1)
+                                if (file_info[ep_events[i].data.fd][j].bytes == -1)
                                 {
-                                    snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[i][j].file_name);
+                                    snprintf(message, sizeof(message), "%d) %s/", j + 1, file_info[ep_events[i].data.fd][j].file_name);
                                 }
                                 else
                                 {
-                                    snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[i][j].file_name, file_info[i][j].bytes);
+                                    snprintf(message, sizeof(message), "%d) %s, %d bytes", j + 1, file_info[ep_events[i].data.fd][j].file_name, file_info[ep_events[i].data.fd][j].bytes);
                                 }
 
                                 write(ep_events[i].data.fd, message, sizeof(message));
@@ -392,6 +396,8 @@ void get_file_info(const char *folder_name, file_info_t (*file_info)[10], int *i
 
     struct dirent *entry;
     struct stat st;
+
+    // memset(&(file_info[fd]), 0, 10 * sizeof(file_info_t));
 
     while ((entry = readdir(dir)) != NULL)
     {

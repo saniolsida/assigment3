@@ -29,6 +29,7 @@ int main(int argc, char *argv[])
     file_info_t file_info[BUF_SIZE];
     char *curr_dir = getcwd(NULL, 0);
     int index = 0;
+    int sock_num = 0;
 
     FILE *fp;
     if (argc != 3)
@@ -51,6 +52,7 @@ int main(int argc, char *argv[])
     else
         puts("Connected...........");
 
+
     while ((str_len = read(sock, message, BUF_SIZE)) > 0)
     {
         message[str_len] = '\0';
@@ -60,7 +62,18 @@ int main(int argc, char *argv[])
         if (!strcmp(message, "[END]"))
             break;
 
-        printf("%s\n", message);
+        if(strncmp(message,"[NUM]",5) == 0)
+        {
+            char *name = message + 5;
+            char *end = strstr(name, "[MUN]");
+            if (end)
+                *end = '\0';
+
+            sock_num = atoi(name);
+            printf("sock num %d\n",sock_num);
+        }else{
+            printf("%s\n", message);
+        }
     }
 
     while (1)
