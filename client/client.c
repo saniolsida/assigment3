@@ -8,10 +8,12 @@
 #include <sys/stat.h>
 
 #define BUF_SIZE 1024
-#define FILE_SIZE 512
+#define FILE_SIZE 64
+#define WORD_SIZE 32
 
 typedef struct
 {
+    int seq;
     char file_name[FILE_SIZE];
     char file_path[FILE_SIZE];
     int bytes;
@@ -19,6 +21,14 @@ typedef struct
 
 void error_handling(char *message);
 void get_file_info(const char *folder_name, file_info_t file_info[], int *index);
+void get_file_from_server(int sock, char message[BUF_SIZE],
+                          int bytes);
+void update_receive_file_info(int sock);
+
+file_info_t recv_file_info[FILE_SIZE];
+int recv_index = 0;
+char server_curr_dir[FILE_SIZE];
+char server_root_dir[FILE_SIZE];
 
 int main(int argc, char *argv[])
 {
@@ -27,11 +37,12 @@ int main(int argc, char *argv[])
     int str_len, bytes;
     struct sockaddr_in serv_adr;
     file_info_t file_info[BUF_SIZE];
+
     char *curr_dir = getcwd(NULL, 0);
+
     int index = 0;
     int sock_num = 0;
 
-    FILE *fp;
     if (argc != 3)
     {
         printf("Usage : %s <IP> <port>\n", argv[0]);
@@ -52,124 +63,60 @@ int main(int argc, char *argv[])
     else
         puts("Connected...........");
 
+    update_receive_file_info(sock);
 
-    while ((str_len = read(sock, message, BUF_SIZE)) > 0)
-    {
-        message[str_len] = '\0';
+    strcpy(server_root_dir, recv_file_info[0].file_path);
+    strcpy(server_curr_dir, recv_file_info[0].file_path);
 
-        if (str_len == -1)
-            error_handling("read() error!");
-        if (!strcmp(message, "[END]"))
-            break;
-
-        if(strncmp(message,"[NUM]",5) == 0)
-        {
-            char *name = message + 5;
-            char *end = strstr(name, "[MUN]");
-            if (end)
-                *end = '\0';
-
-            sock_num = atoi(name);
-            printf("sock num %d\n",sock_num);
-        }else{
-            printf("%s\n", message);
-        }
-    }
-
+    index = 0; // client의 파일 개수
     while (1)
     {
-        index = 0;
-        get_file_info(curr_dir, file_info, &index);
         fputs("\nSelect file or folder(Q to quit): ", stdout);
         fgets(message, BUF_SIZE, stdin);
         printf("\n---------------------\n");
         if (!strcmp(message, "q\n") || !strcmp(message, "Q\n"))
             break;
 
-        write(sock, message, strlen(message));
+        char *endptr;
+        long num = strtol(message, &endptr, 10);
+
+        if (*endptr != '\n' && *endptr != '\0')
+        {
+            printf("Invalid input. Please enter a number or Q to quit.\n");
+            continue;
+        }
+        else
+        {
+            write(sock, message, strlen(message));
+        }
 
         str_len = read(sock, message, BUF_SIZE - 1);
 
         message[str_len] = 0;
         if (strncmp(message, "[FILE]", 6) == 0) // 파일을 선택
         {
-            char file_name[FILE_SIZE];
-            char *name = message + 6;
-            char *end = strstr(name, "[END]");
-            if (end)
-                *end = '\0';
-
-            char *ptr = strtok(name, " ");
-
-            snprintf(file_name, sizeof(file_name), "%s", ptr);
-
-            ptr = strtok(NULL, " ");
-
-            bytes = atoi(ptr);
-
-            printf("file name: %s, bytes: %d\n", file_name, bytes);
-
-            write(sock, "[FILE]", 6);
-
-            fp = fopen(file_name, "wb");
-            if (!fp)
-                error_handling("fopen() failed");
-
-            while (bytes > 0)
-            {
-                str_len = read(sock, message, BUF_SIZE);
-
-                bytes -= str_len;
-
-                fwrite((void *)message, 1, str_len, fp);
-            }
-            fclose(fp);
-
-            printf("파일(%s) 다운로드 성공!\n---------------\n", file_name);
-
-            write(sock, "[ENDFILE]", 9);
-
-            char new_message[BUF_SIZE];
-            while (1)
-            {
-                str_len = read(sock, new_message, BUF_SIZE);
-                if (strncmp(new_message, "[END]", 5) == 0)
-                    break;
-                printf("%s\n", new_message);
-            }
+            get_file_from_server(sock, message, bytes);
         }
         else if (strncmp(message, "[DIR]", 5) == 0) // dir select
         {
-            write(sock, "Thankyou", 8);
+            char *dir_path = message + 5;
 
-            while (1)
-            {
-                str_len = read(sock, message, BUF_SIZE);
-                if (strncmp(message, "[END]", 5) == 0)
-                    break;
-                printf("%s\n", message);
-            }
-            // printf("%s\n", message);
+            strcpy(server_curr_dir, dir_path);
+
+            printf("open dir: %s\n\n", server_curr_dir);
+            update_receive_file_info(sock);
         }
         else if (strncmp(message, "[BACK]", 6) == 0)
         {
-            write(sock, "BACK", 4);
+            char *dir_path = message + 6;
+            strcpy(server_curr_dir, dir_path);
 
-            while ((str_len = read(sock, message, BUF_SIZE)) > 0)
-            {
-                message[str_len] = '\0';
-
-                if (str_len == -1)
-                    error_handling("read() error!");
-                if (!strcmp(message, "[END]"))
-                    break;
-
-                printf("%s\n", message);
-            }
+            update_receive_file_info(sock);
         }
         else if (strncmp(message, "[SEND]", 6) == 0)
         {
             int input = 0;
+            get_file_info(curr_dir, file_info, &index);
 
             for (int i = 0; i < index; i++)
             {
@@ -200,8 +147,8 @@ int main(int argc, char *argv[])
 
             if (!fp)
                 error_handling("fopen() failed");
-            
-            memset(&message, 0, sizeof(message));   
+
+            memset(&message, 0, sizeof(message));
 
             while (1)
             {
@@ -213,21 +160,14 @@ int main(int argc, char *argv[])
                 }
                 write(sock, message, BUF_SIZE);
             }
-            memset(&message, 0, sizeof(message));   
 
-            str_len = read(sock, message, BUF_SIZE - 1);
-            
-            printf("%s\n",message);
+            fclose(fp);
+
+            memset(&message, 0, sizeof(message));
 
             printf("---------------------\n");
-            char new_message[BUF_SIZE];
-            while (1)
-            {
-                str_len = read(sock, new_message, BUF_SIZE);
-                if (strncmp(new_message, "[END]", 5) == 0)
-                    break;
-                printf("%s\n", new_message);
-            }
+
+            update_receive_file_info(sock);
         }
         else
         {
@@ -241,6 +181,7 @@ int main(int argc, char *argv[])
 
 void get_file_info(const char *folder_name, file_info_t file_info[], int *index)
 {
+    (*index) = 0;
     DIR *dir = opendir(folder_name);
     struct stat sb;
     if (!dir)
@@ -262,7 +203,7 @@ void get_file_info(const char *folder_name, file_info_t file_info[], int *index)
             return;
         }
 
-        char path[FILE_SIZE];
+        char path[BUF_SIZE];
         snprintf(path, sizeof(path), "%s/%s", folder_name, entry->d_name);
         if (stat(path, &st) == -1)
             error_handling("stat() failed");
@@ -292,6 +233,74 @@ void get_file_info(const char *folder_name, file_info_t file_info[], int *index)
     }
 
     closedir(dir);
+}
+
+void get_file_from_server(int sock, char message[BUF_SIZE], int bytes)
+{
+    FILE *fp;
+    int str_len;
+    char buf[BUF_SIZE];
+    char file_name[FILE_SIZE];
+    char *name = message + 6;
+
+    char *end = strstr(name, "[END]");
+    if (end)
+        *end = '\0';
+
+    char *ptr = strtok(name, " ");
+
+    snprintf(file_name, sizeof(file_name), "%s", ptr);
+
+    ptr = strtok(NULL, " ");
+
+    bytes = atoi(ptr);
+
+    printf("file name: %s, bytes: %d\n", file_name, bytes);
+
+    file_name[strlen(file_name)] = '\0';
+
+    fp = fopen(file_name, "wb");
+    if (!fp)
+        error_handling("fopen() failed");
+
+    write(sock, file_name, strlen(file_name));
+
+    while (bytes > 0)
+    {
+        str_len = read(sock, buf, BUF_SIZE);
+        fwrite((void *)buf, 1, str_len, fp);
+
+        bytes -= str_len;
+    }
+    fclose(fp);
+
+    printf("파일(%s) 다운로드 성공!\n---------------------\n", file_name);
+
+    write(sock, "[ENDFILE]", 9);
+    update_receive_file_info(sock);
+}
+
+void update_receive_file_info(int sock)
+{
+    memset(recv_file_info, 0, sizeof(recv_file_info));
+
+    read(sock, recv_file_info, sizeof(recv_file_info)); // get whole file index
+
+    if (strcmp(server_curr_dir, server_root_dir) != 0)
+    {
+        printf("-1) Back\n");
+    }
+
+    printf("0) Send file\n");
+
+    for (int i = 0; i < FILE_SIZE; i++)
+    {
+        if (strlen(recv_file_info[i].file_name) > 0) // file_name이 비어 있지 않은 경우
+        {
+            printf("%d) %s : %d bytes\n", recv_file_info[i].seq,
+                   recv_file_info[i].file_name, recv_file_info[i].bytes);
+        }
+    }
 }
 
 void error_handling(char *message)
